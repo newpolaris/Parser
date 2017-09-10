@@ -6,15 +6,11 @@
 #pragma warning(disable: 4521)
 #pragma warning(disable: 4702)
 #pragma warning(disable: 4819)
-#define BOOST_SPIRIT_X3_DEBUG
-#define BOOST_SPIRIT_UNICODE 
+// #define BOOST_SPIRIT_X3_DEBUG
 #include <boost/config/warning_disable.hpp>
 #include <boost/spirit/home/x3.hpp>
-#include <boost/spirit/include/support_istream_iterator.hpp>
 #include <boost/spirit/home/x3/support/ast/variant.hpp>
 #include <boost/fusion/include/adapt_struct.hpp>
-#include <boost/fusion/include/std_pair.hpp>
-#include <boost/fusion/include/io.hpp>
 #pragma warning(pop)
 #include <d3d11.h>
 #include <type_traits>
@@ -90,9 +86,17 @@ namespace ast
 
     struct blend_config;
     struct depth_stencil_config;
+    struct rasterizer_config;
+    struct vertex_config;
+    struct pixel_config;
+    struct geometry_config;
     struct pass_config : x3::variant<
           x3::forward_ast<blend_config>
         , x3::forward_ast<depth_stencil_config>
+        , x3::forward_ast<rasterizer_config>
+        , x3::forward_ast<vertex_config>
+        , x3::forward_ast<pixel_config>
+        , x3::forward_ast<geometry_config>
     >
     {
         using base_type::base_type;
@@ -102,17 +106,38 @@ namespace ast
     struct pass_desc
     {
         std::string name;
-        // std::vector<pass_config> configs;
+        std::vector<pass_config> configs;
     };
     
     struct blend_config
     {
         std::string name;
-        float blend_factor[4];
+        std::vector<float> blend_factor;
         uint32_t sample_mask;
     };
 
     struct depth_stencil_config
+    {
+        std::string name;
+        uint32_t stencil_ref;
+    };
+
+    struct rasterizer_config
+    {
+        std::string name;
+    };
+
+    struct vertex_config
+    {
+        std::string name;
+    };
+
+    struct pixel_config
+    {
+        std::string name;
+    };
+
+    struct geometry_config
     {
         std::string name;
     };
@@ -217,19 +242,36 @@ BOOST_FUSION_ADAPT_STRUCT(
     (auto, entrypoint)
 )
 BOOST_FUSION_ADAPT_STRUCT(
-    client::ast::pass_desc,
-    (auto, name)
-    // (auto, configs)
-)
-BOOST_FUSION_ADAPT_STRUCT(
     client::ast::blend_config,
     (auto, name)
-    (client::ast::float4, blend_factor)
+    (auto, blend_factor)
     (auto, sample_mask)
 )
 BOOST_FUSION_ADAPT_STRUCT(
     client::ast::depth_stencil_config,
     (auto, name)
+    (auto, stencil_ref)
+)
+BOOST_FUSION_ADAPT_STRUCT(
+    client::ast::rasterizer_config,
+    (auto, name)
+)
+BOOST_FUSION_ADAPT_STRUCT(
+    client::ast::vertex_config,
+    (auto, name)
+)
+BOOST_FUSION_ADAPT_STRUCT(
+    client::ast::pixel_config,
+    (auto, name)
+)
+BOOST_FUSION_ADAPT_STRUCT(
+    client::ast::geometry_config,
+    (auto, name)
+)
+BOOST_FUSION_ADAPT_STRUCT(
+    client::ast::pass_desc,
+    (auto, name)
+    (auto, configs)
 )
 BOOST_FUSION_ADAPT_STRUCT(
     client::ast::technique_desc,
@@ -638,21 +680,82 @@ namespace client { namespace parser {
         >> ';'
         ;
 
-#if 0
+    auto const float4
+        = x3::rule<class float4_, std::vector<float>>{}
+        = lit("float4") >> '(' >> ((x3::float_ >> -x3::lit('f')) % ',') >> ')' ;
+    auto const str2uint32 
+        = x3::rule<class str2uint32_, uint32_t>{}
+        = x3::lexeme[+x3::alnum][([](auto &ctx) {
+            auto& str = _attr( ctx );
+            _val( ctx ) = std::stoul( str, nullptr, 0 );
+          })];
+
     x3::rule<class blend_config, ast::blend_config> const
         blend_config = "blend_config";
     auto const blend_config_def =
            lit("SetBlendState")
+        >> '('
+        >> identifier
+        >> ','
+        >> float4
+        >> ','
+        >> str2uint32
+        >> ')'
+        >> ';'
+        ;
+
+    x3::rule<class depth_stencil_config, ast::depth_stencil_config> const
+        depth_stencil_config = "depth_stencil_config";
+    auto const depth_stencil_config_def =
+           lit("SetDepthStencilState")
+        >> '('
+        >> identifier
+        >> ','
+        >> x3::uint32
+        >> ')'
+        >> ';'
+        ;
+
+    auto const name = '(' >> identifier >> ')' >> ';';
+
+    x3::rule<class rasterizer_config, ast::rasterizer_config> const
+        rasterizer_config = "rasterizer_config";
+    auto const rasterizer_config_def =
+           lit("SetRasterizerState")
+        >> name
+        ;
+
+    x3::rule<class vertex_config, ast::vertex_config> const
+        vertex_config = "vertex_config";
+    auto const vertex_config_def =
+           lit("SetVertexShader")
+        >> name
+        ;
+
+    x3::rule<class pixel_config, ast::pixel_config> const
+        pixel_config = "pixel_config";
+    auto const pixel_config_def =
+           lit("SetPixelShader")
+        >> name
+        ;
+
+    x3::rule<class geometry_config, ast::geometry_config> const
+        geometry_config = "geometry_config";
+    auto const geometry_config_def =
+           lit("SetGeometryShader")
+        >> name
         ;
 
     x3::rule<class pass_config, ast::pass_config> const
         pass_config = "pass_config";
     auto const pass_config_def =
           blend_config
-        // | blend_state
-        // | depth_stencil_state
+        | depth_stencil_config
+        | rasterizer_config
+        | vertex_config
+        | pixel_config
+        | geometry_config
         ;
-#endif
 
     x3::rule<class pass_desc, ast::pass_desc> const
         pass_desc = "pass_desc";
@@ -660,7 +763,7 @@ namespace client { namespace parser {
            "pass"
         >> identifier
         >> '{'
-        // >> +pass_config
+        >> +pass_config
         >> '}'
         ;
 
@@ -695,8 +798,11 @@ namespace client { namespace parser {
         rasterizer_state, raster_desciptor,
         shader_compiler_desc,
         technique_desc,
-        // blend_config,
-        // pass_config,
+        blend_config,
+        depth_stencil_config,
+        rasterizer_config,
+        vertex_config, pixel_config, geometry_config,
+        pass_config,
         pass_desc, 
         program,
         statement,
