@@ -6,6 +6,7 @@
 #include <boost/spirit/home/x3/support/ast/variant.hpp>
 #include <boost/fusion/include/adapt_struct.hpp>
 #pragma warning(pop)
+#include <d3d11.h>
 
 namespace client {
 namespace x3 = boost::spirit::x3;
@@ -25,6 +26,7 @@ namespace ast
         , x3::forward_ast<rasterizer_state>
         , x3::forward_ast<shader_compiler_desc>
         , x3::forward_ast<technique_desc>
+        , std::string
     >
     {
         using base_type::base_type;

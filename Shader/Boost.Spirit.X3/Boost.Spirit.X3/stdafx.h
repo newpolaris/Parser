@@ -9,4 +9,6 @@
 #include <list>
 #include <boost/locale.hpp>
 #include <boost/locale/encoding.hpp>
+#include <cassert>
+#define ASSERT(a) assert(##a)
 

@@ -1,125 +1,171 @@
-/*
-Program source code are licensed under the zlib license, except source code of external library.
+#include "Skinning.hlsli"
 
-Zerogram Sample Program
-http://zerogram.info/
+struct Material
+{
+    float3 diffuse;
+    float alpha; // diffuse alpha
+    float3 specular;
+    float specularPower;
+    float3 ambient;
+};
 
-This software is provided 'as-is', without any express or implied warranty.
-In no event will the authors be held liable for any damages arising from the use of this software.
+// vertex shader
+cbuffer VSConstants : register(b0)
+{
+	matrix view;
+	matrix projection;
+};
 
-Permission is granted to anyone to use this software for any purpose,
-including commercial applications, and to alter it and redistribute it freely,
-subject to the following restrictions:
+cbuffer Model : register(b2)
+{
+	matrix model;
+}
 
-1. The origin of this software must not be misrepresented; you must not claim that you wrote the original software. If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required.
+static const int kSphereNone = 0;
+static const int kSphereMul = 1;
+static const int kSphereAdd = 2;
 
-2. Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
+// pixel shader
+cbuffer MaterialConstants : register(b3)
+{
+	Material material;
+	int sphereOperation;
+    bool bUseTexture;
+    bool bUseToon;
+    float EdgeSize;
+    float4 EdgeColor;
+};
 
-3. This notice may not be removed or altered from any source distribution.*
-*/
+cbuffer PassConstants : register(b4)
+{
+    float3 SunDirection; // V
+    float3 SunColor;
+    float4 ShadowTexelSize;
+}
 
-#include "cbuff.h"
-#include "shadow.h"
+Texture2D<float4> texDiffuse : register(t0);
+Texture2D<float3> texSphere : register(t1);
+Texture2D<float3> texToon : register(t2);
 
-// 変数
-Texture2D txDiffuse : register(t0);
-Texture2D txToon : register(t1);
-Texture2D txSphereMap : register(t2);
-
-// サンプラーステート
 SamplerState samLinear : register(s0)
 {
 	Filter = MIN_MAG_MIP_LINEAR;
 	AddressU = WRAP;
 	AddressV = WRAP;
 };
+
 SamplerState samToon : register(s1)
 {
 	Filter = MIN_MAG_MIP_LINEAR;
 	AddressU = CLAMP;
 	AddressV = CLAMP;
 };
-SamplerState samSphereMap : register(s2)
+
+SamplerState samSphere : register(s2)
 {
 	Filter = MIN_MAG_MIP_LINEAR;
 	AddressU = CLAMP;
 	AddressV = CLAMP;
 };
 
-//-------------
-struct VS_INPUT
+// Per-vertex data used as input to the vertex shader.
+struct VertexInput
 {
-	float4 Pos : POSITION;
-	float3 Nor : NORMAL;
-	float2 Tex : TEXCOORD0;
-	uint4 Bidx : BONEINDEX;
-	uint4 Bwgt : BONEWEIGHT;
+	float3 normal : NORMAL;
+	float2 uv : TEXTURE;
+	uint4 boneID : BONE_ID;
+	float4 boneWeight : BONE_WEIGHT;
+	float edgeScale : EDGE_FLAT;
+    float3 position : POSITION;
 };
 
-//-------------
-struct PS_INPUT
+// Per-pixel color data passed through the pixel shader.
+struct PixelShaderInput
 {
-	float4 Pos : SV_POSITION;
-	float2 Tex : TEXCOORD0;
-	float3 Nor : NORMAL;
-	
-	float4 ShadowPos : SHADOW_POS;
+	float4 posH : SV_POSITION;
+	float3 posV : POSITION0;
+	float3 normalV : NORMAL;
+	float2 uv : TEXTURE;
 };
-// 関数
 
-//-------------------------
-PS_INPUT vsBasic( VS_INPUT input)
+// Simple shader to do vertex processing on the GPU.
+PixelShaderInput vsBasic(VertexInput input)
 {
-	PS_INPUT output = (PS_INPUT)0;
-	float4 pos = BoneSkinning(input.Pos,input.Bidx,input.Bwgt);
-	float3 nor = BoneSkinningNormal(input.Nor,input.Bidx,input.Bwgt);
-	nor = normalize(nor);
-	
-	matrix world = mul(Object.mtxWorld, Model.mtxModel);
-	pos = mul( pos, world );
-	output.ShadowPos = mul(pos, Scene.mtxShadow);
+	PixelShaderInput output;
 
-	pos = mul( pos, Scene.mtxView );
-	output.Pos = mul( pos, Scene.mtxProj );
-	output.Tex = input.Tex;
-	output.Nor = mul( nor, (float3x3)world );//とりあえずこれで
+    float3 pos = BoneSkinning( input.position, input.boneWeight, input.boneID );
+    float3 normal = BoneSkinningNormal( input.normal, input.boneWeight, input.boneID );
+
+    // Transform the vertex position into projected space.
+	matrix modelview = mul( view, model );
+	float4 posV = mul( modelview, float4(pos, 1.0) );
+	output.posV = posV.xyz;
+	output.posH = mul( projection, posV );
+	output.normalV = mul( (float3x3)modelview, normal );
+	output.uv = input.uv;
+
 	return output;
 }
 
-
-//----------------------------
-float4 psBasic( PS_INPUT input ) : SV_Target
+PixelShaderInput vsOutline(VertexInput input)
 {
-	//return Material.aParam[0];
-	float3 nor = normalize(input.Nor);
-	float l = dot(nor, Light.vDirLight[0].xyz);
-	float lighting = DepthShadow(input.ShadowPos,l);
-	l = saturate(l)*lighting;
-
-	float3 toon = float3(1,1,1);
-	if( Material.aParam[0].y > 0){//トゥーンテクスチャあり
-		toon = txToon.Sample( samToon, float2(0,0.5*(1-l))).xyz;
-	}
-	float4 diff = Material.vDiffuse;
-	if( Material.aParam[0].x > 0){//テクスチャあり
-		diff = diff*txDiffuse.Sample( samLinear, input.Tex);
-	}
-	float4 col = float4(toon,1)*diff;
-	clip(col.w - 0.001);//Alpha Test
-
-	return col;
-}
-//----------------------------
-void psShadow( PS_INPUT input )
-{
-	float4 diff = Material.vDiffuse;
-	if( Material.aParam[0].x > 0){//テクスチャあり
-		diff = diff*txDiffuse.Sample( samLinear, input.Tex);
-	}
-	clip(diff.w - 0.001);//Alpha Test
+    const float outline = 0.01f;
+    input.position.xzy += input.normal * outline;
+    return vsBasic(input);
 }
 
-// ステート定義　※大文字小文字の区別なし
+// A pass-through function for the (interpolated) color data.
+float4 psBasic(PixelShaderInput input) : SV_TARGET
+{
+	float3 lightVecV = normalize( -SunDirection );
+	float3 normalV = normalize( input.normalV );
+	float intensity = dot( lightVecV, normalV ) * 0.5 + 0.5;
+	float2 toonCoord = float2(0.5, 1.0 - intensity);
+
+	float3 toEyeV = -input.posV;
+	float3 halfV = normalize( toEyeV + lightVecV );
+
+	float NdotH = dot( normalV, halfV );
+	float specularFactor = pow( max(NdotH, 0.001f), material.specularPower );
+
+	float3 diffuse = material.diffuse * SunColor;
+	float3 ambient = material.ambient;
+	float3 specular = specularFactor * material.specular;
+
+	float texAlpha = 1.0;
+	float3 texColor = float3(1.0, 1.0, 1.0);
+	if (bUseTexture)
+	{
+		float4 tex = texDiffuse.Sample( samLinear, input.uv );
+		texColor = tex.xyz;
+		texAlpha = tex.w;
+	}
+	float2 sphereCoord = 0.5 + 0.5*float2(1.0, -1.0) * normalV.xy;
+	if (sphereOperation == kSphereAdd)
+		texColor += texSphere.Sample( samSphere, sphereCoord );
+	else if (sphereOperation == kSphereMul)
+		texColor *= texSphere.Sample( samSphere, sphereCoord );
+	float3 color = texColor * (ambient + diffuse) + specular;
+    if (bUseToon)
+        color *= texToon.Sample( samToon, toonCoord );
+	float alpha = texAlpha * material.alpha;
+	return float4(color, alpha);
+}
+
+float4 psOutline(PixelShaderInput input) : SV_TARGET
+{	
+    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+}
+
+void psShadow(PixelShaderInput input)
+{
+	float3 diffuse = material.diffuse;
+	float texAlpha = 1.0;
+	if (bUseTexture)
+		texAlpha = texDiffuse.Sample( samLinear, input.uv ).w;
+    float alpha = material.alpha*texAlpha;
+    clip( alpha - 0.001 );
+}
 
 BlendState NoBlend {
 	BlendEnable[0] = False;
@@ -138,11 +184,19 @@ DepthStencilState DepthTestOn {
 	DepthWriteMask = All;
 	DepthFunc = LESS_EQUAL;
 };
+DepthStencilState DepthTestOff {
+	DepthEnable = False;	
+};
 
 RasterizerState RasterSolid {
 	FillMode = Solid;
 	CullMode = Back;
-	FrontCounterClockwise = False;
+	FrontCounterClockwise = True;
+};
+RasterizerState RasterOutline {
+	FillMode = Solid;
+	CullMode = Front;
+	FrontCounterClockwise = True;
 };
 BlendState BlendShadow {
 	BlendEnable[0] = False;
@@ -151,41 +205,43 @@ BlendState BlendShadow {
 RasterizerState RasterShadow {
 	FillMode = Solid;
 	CullMode = Back;
-	FrontCounterClockwise = False;
+	FrontCounterClockwise = True;
 };
-// シェーダ
+
 VertexShader vs_main = CompileShader( vs_5_0, vsBasic() );
+VertexShader vs_outline = CompileShader( vs_5_0, vsOutline() );
 PixelShader ps_main = CompileShader( ps_5_0, psBasic() );
+PixelShader ps_outline = CompileShader( ps_5_0, psOutline() );
 PixelShader ps_shadow = CompileShader( ps_5_0, psShadow() );
 
-// テクニック
 technique11 t0 {
-	//パス
 	pass p0 {
-		// ステート設定
 		SetBlendState( BlendOn, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetDepthStencilState( DepthTestOn, 0 );
 		SetRasterizerState( RasterSolid );
 		
-		// シェーダ
 		SetVertexShader( vs_main );
 		SetPixelShader( ps_main );
 	}
 }
 
 technique11 shadow_cast {
-	//パス
 	pass p0 {
-		// ステート設定
 		SetBlendState( BlendShadow, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetDepthStencilState( DepthTestOn, 0 );
 		SetRasterizerState( RasterShadow );
 
-		// シェーダ
 		SetVertexShader( vs_main );
 		SetPixelShader( ps_shadow );
 	}
 }
 
+technique11 outline {
+    pass p1 {
+		SetDepthStencilState( DepthTestOn, 0 );
+		SetRasterizerState( RasterOutline );
 
-
+		SetVertexShader( vs_outline );
+		SetPixelShader( ps_outline );
+    }
+}

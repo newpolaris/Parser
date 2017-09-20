@@ -1,5 +1,5 @@
 #include "stdafx.h"
-#include "parse.h"
+#include "FxParser.h"
 #include <iostream>
 
 std::string simpleRead( const std::string& FileName )

@@ -358,7 +358,60 @@ namespace client { namespace parser {
     using ascii::char_;
     using ascii::string;
 
+    auto const storage_class =
+          char_("extern")
+        | char_("static")
+        | char_("nointerpolation")
+        | char_("shared")
+        | char_("groupshared")
+        ;
+
+    auto const type_modifier =
+          char_("const")
+        | char_("row_major")
+        | char_("column_major")
+        ;
+
+    auto const scalar_type =
+          char_("bool")
+        | char_("int")
+        | char_("uint")
+        | char_("half")
+        | char_("float")
+        | char_("double")
+        ;
+
+    auto const scalar_vec_type =
+        (scalar_type > (char_('1') | char_('2') | char_('3') | char_('4')))
+        ;
+
+    auto const vector_type = 
+          scalar_vec_type 
+        | char_("vector") > *(char_ - '>') > char_('>')
+        ;
+
     auto const identifier = x3::lexeme[+(x3::alnum | char_('_'))];
+
+    // Variable Syntax
+    // https://msdn.microsoft.com/ko-kr/library/windows/desktop/bb509706(v=vs.85).aspx
+    /*
+        [Storage_Class] [Type_Modifier] Type Name[Index]
+        [: Semantic]
+        [: Packoffset]
+        [: Register];
+        [Annotations]
+        [= Initial_Value]
+    */
+    x3::rule<class variable_sytax_text, std::string> const
+        variable_sytax_text = "variable_sytax_text";
+    auto const variable_sytax_text_def  = 
+           -storage_class
+        >> -type_modifier
+        >> (scalar_type | vector_type)
+        >> identifier
+        >> x3::no_skip[*(char_ - ';')]
+        >> char_(';');
+        ;
 
     auto const comment_line = "//" >> *(char_ -  x3::eol) >> x3::eol;
     auto const comment_block = "/*" >> *(char_ - "*/") >> "*/";
@@ -588,21 +641,21 @@ namespace client { namespace parser {
         >> '}'
         ;
 
-    x3::rule<class texture_text> const
+    x3::rule<class texture_text, std::string> const
         texture_text = "texture_text";
     auto const texture_text_def =
            x3::lexeme[x3::no_case["texture"]] 
         >> x3::no_skip[*(char_ - ';')]
         >> char_(';');
 
-    x3::rule<class include_text> const
+    x3::rule<class include_text, std::string> const
         include_text = "include_text";
     auto const include_text_def = 
            x3::lexeme["#include"] 
         >> x3::no_skip[*(char_ - x3::eol)]
         ;
 
-    x3::rule<class struct_text> const
+    x3::rule<class struct_text, std::string> const
         struct_text = "struct_text";
     auto const struct_text_def = 
            x3::lexeme["struct"]
@@ -613,7 +666,7 @@ namespace client { namespace parser {
 
     x3::rule<class block> const
         block = "block";
-    x3::rule<class function_text> const
+    x3::rule<class function_text, std::string> const
         function_text = "function_text";
     auto const not_block = x3::no_skip[+(char_ - "{" - "}")];
     auto const block_def =
@@ -633,6 +686,18 @@ namespace client { namespace parser {
         >> block
         ;
 
+    x3::rule<class buffer_text, std::string> const
+        buffer_text = "buffer_text";
+    auto const buffer_text_def =
+           x3::lexeme["cbuffer"]
+        // >> x3::no_skip[identifier]
+        // >> x3::no_skip[char_(':')]
+        // >> x3::lexeme["register"]
+        >> x3::no_skip[+(char_ - '}')]
+        >> char_('}')
+        >> -char_(';')
+        ;
+
     x3::rule<class statement, ast::statement> const 
         statement = "statement";
     auto const statement_def = 
@@ -646,6 +711,8 @@ namespace client { namespace parser {
         | struct_text
         | include_text
         | texture_text
+		| buffer_text
+        | variable_sytax_text
         ;
     x3::rule<class program, ast::program> const 
         program = "program";
@@ -666,7 +733,7 @@ namespace client { namespace parser {
         pass_desc, 
         program,
         statement,
-        block, function_text, struct_text, include_text, texture_text);
+        block, function_text, struct_text, include_text, texture_text, buffer_text, variable_sytax_text);
 
     struct expression_class
     {
